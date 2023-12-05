@@ -23,6 +23,11 @@ class STPNR(torch.nn.Module):
         self._input_size = input_size
         self._hidden_size = hidden_size
         self._output_size = output_size
+        
+        self.ei_mask = torch.ones(hidden_size, hidden_size + input_size)
+        # Assuming first 4/5 are excitatory and last 1/5 are inhibitory
+        num_inhibitory = hidden_size // 5
+        self.ei_mask[-num_inhibitory:, :] = -1
 
         # --- Parameters ---
         init_k = 1 / math.sqrt(self._hidden_size)
@@ -81,7 +86,7 @@ def main(config):
         batch_size=batch_size,
         data_path=DATA,
         onehot=True,
-        train_size=5000,
+        train_size=10000,
         valid_size=5000,
         test_size=1000,
     )
@@ -90,7 +95,7 @@ def main(config):
 
     net = STPNR(
         input_size=37,  # alphabet character + digits + '?' sign
-        hidden_size=11,
+        hidden_size=50,
         output_size=output_size,  # predict possibly any character
     )
 
@@ -99,7 +104,7 @@ def main(config):
     loss_function = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
 
-    n_epochs, best_validation_acc = 200, -float('inf')
+    n_epochs, best_validation_acc = 100, -float('inf')
     #change to 200
     for i_epoch in range(1, n_epochs + 1):
         for sentence, tags in train_dataloader:
@@ -113,6 +118,14 @@ def main(config):
             loss = loss_function(tag_scores.view(-1, output_size), tags.view(-1))
             loss.backward()
             optimizer.step()
+            with torch.no_grad():
+                # First 4/5 are excitatory (E units), set negative weights to 0
+                num_excitatory = 4 * net.weight.shape[0] // 5
+                net.weight.data[:num_excitatory] = torch.clamp(net.weight.data[:num_excitatory], min=0)
+
+                # Last 1/5 are inhibitory (I units), set positive weights to 0
+                num_inhibitory = net.weight.shape[0] // 5
+                net.weight.data[-num_inhibitory:] = torch.clamp(net.weight.data[-num_inhibitory:], max=0)
 
         with torch.no_grad():
             acc = 0
@@ -132,8 +145,7 @@ def main(config):
             print("Best validation accuracy", best_validation_acc)
             print("Last validation accuracy", last_validation_acc)
             print("Last loss", f"{loss.cpu().item():4f}")
-  
-        if i_epoch == n_epochs:
+        ''' if i_epoch == n_epochs:
             sentence, _ = next(iter(validation_dataloader))  # Get a sample batch
             sentence = sentence.to(device)
             _, states = net(sentence, states=None)
@@ -150,8 +162,39 @@ def main(config):
             plt.title('Final f_tp1 values after Training')
 
             # Specify the filename and path here
-            plt.savefig('final_f_tp1_plot.png', dpi=300)
+            plt.savefig('final_f_tp1_plot_EI.png', dpi=300)
+            plt.close() ''' 
+            
+        if i_epoch == n_epochs:
+            sentence, _ = next(iter(validation_dataloader))  # Get a sample batch
+            sentence = sentence.to(device)
+            _, states = net(sentence, states=None)
+            final_f_tp1 = states[1].detach().cpu().numpy()  # Only need states[1]
+            print(final_f_tp1.shape)
+
+        if final_f_tp1 is not None:
+            num_inputs = 37  # Use the provided input_size
+            num_excitatory = 4 * (final_f_tp1.shape[2] - num_inputs) // 5  # 4/5 are E units
+
+            # Adjust indices to exclude input weights
+            e_to_e_mean = np.mean(final_f_tp1[:, :num_excitatory, num_inputs:num_excitatory+num_inputs])
+            e_to_i_mean = np.mean(final_f_tp1[:, num_excitatory:, num_inputs:num_excitatory+num_inputs])
+
+            # Plotting the means as bars
+            plt.bar(['E-to-E', 'E-to-I'], [e_to_e_mean, e_to_i_mean], color=['red', 'blue'])
+            plt.ylabel('Average Weight')
+            plt.title('Average Weights in E-I Network')
+            plt.savefig('average_weights_EI.png', dpi=300)
             plt.close()
+
+            # Plotting and saving the original weight matrix
+            mean_f_tp1 = np.mean(final_f_tp1, axis=0)
+            plt.imshow(mean_f_tp1, cmap='hot', interpolation='nearest')
+            plt.colorbar()
+            plt.title('Final f_tp1 Matrix')
+            plt.savefig('matrix_syn.png', dpi=300)
+            plt.close()
+
 
 
 
