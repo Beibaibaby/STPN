@@ -194,6 +194,7 @@ def main(config):
             plt.title('Final f_tp1 Matrix')
             plt.savefig('matrix_syn.png', dpi=300)
             plt.close()
+    
 
 
 

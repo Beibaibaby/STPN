@@ -3,6 +3,7 @@ import math
 from typing import Optional, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
+import pickle
 
 import torch
 
@@ -95,7 +96,7 @@ def main(config):
 
     net = STPNR(
         input_size=37,  # alphabet character + digits + '?' sign
-        hidden_size=50,
+        hidden_size=100,
         output_size=output_size,  # predict possibly any character
     )
 
@@ -104,7 +105,8 @@ def main(config):
     loss_function = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
 
-    n_epochs, best_validation_acc = 100, -float('inf')
+    n_epochs, best_validation_acc = 150, -float('inf')
+    e_to_e_mean, e_to_i_mean = None, None
     #change to 200
     for i_epoch in range(1, n_epochs + 1):
         for sentence, tags in train_dataloader:
@@ -194,6 +196,8 @@ def main(config):
             plt.title('Final f_tp1 Matrix')
             plt.savefig('matrix_syn.png', dpi=300)
             plt.close()
+    return e_to_e_mean, e_to_i_mean
+      
     
 
 
@@ -202,5 +206,70 @@ def main(config):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, help="id of gpu used for gradient backpropagation", default=0)
-    parsed_args = parser.parse_args()
-    main(vars(parsed_args))
+    args = parser.parse_args()
+
+    # Lists to store the mean values from each run
+    e_to_e_means = []
+    e_to_i_means = []
+
+    # Run the main function 10 times
+    for _ in range(50):
+        e_to_e_mean, e_to_i_mean = main(vars(args))
+        e_to_e_means.append(e_to_e_mean)
+        e_to_i_means.append(e_to_i_mean)
+
+    # Compute mean and standard deviation
+    mean_e_to_e = np.mean(e_to_e_means)
+    std_e_to_e = np.std(e_to_e_means)
+
+    mean_e_to_i = np.mean(e_to_i_means)
+    std_e_to_i = np.std(e_to_i_means)
+    
+    with open('e_to_e_means.pkl', 'wb') as f:
+        pickle.dump(e_to_e_means, f)
+
+    with open('e_to_i_means.pkl', 'wb') as f:
+        pickle.dump(e_to_i_means, f)
+
+    # Plotting
+    for e_to_e, e_to_i in zip(e_to_e_means, e_to_i_means):
+        plt.scatter(['E-to-E'], [e_to_e], color='red', alpha=0.5)  # Individual E-to-E means
+        plt.scatter(['E-to-I'], [e_to_i], color='blue', alpha=0.5)  # Individual E-to-I means
+
+    # Plot the overall mean and standard deviation as error bars
+    plt.errorbar(['E-to-E'], [mean_e_to_e], yerr=[std_e_to_e], fmt='o', label='E-to-E Mean', color='red', capsize=5)
+    plt.errorbar(['E-to-I'], [mean_e_to_i], yerr=[std_e_to_i], fmt='o', label='E-to-I Mean', color='blue', capsize=5)
+
+    plt.ylabel('Average Weight')
+    plt.title('Average Weights in E-I Network Across Runs')
+    plt.legend()
+    plt.savefig('average_weights_EI_across_runs.png', dpi=300)
+    plt.show()
+    
+    plt.clf()
+    
+    # Convert e_to_e_means and e_to_i_means to their absolute values
+    abs_e_to_e_means = [abs(x) for x in e_to_e_means]
+    abs_e_to_i_means = [abs(x) for x in e_to_i_means]
+
+    # Compute mean and standard deviation for the absolute values
+    abs_mean_e_to_e = np.mean(abs_e_to_e_means)
+    abs_std_e_to_e = np.std(abs_e_to_e_means)
+
+    abs_mean_e_to_i = np.mean(abs_e_to_i_means)
+    abs_std_e_to_i = np.std(abs_e_to_i_means)
+
+    # Plotting absolute values
+    for abs_e_to_e, abs_e_to_i in zip(abs_e_to_e_means, abs_e_to_i_means):
+        plt.scatter(['E-to-E'], [abs_e_to_e], color='red', alpha=0.5)  # Individual E-to-E means
+        plt.scatter(['E-to-I'], [abs_e_to_i], color='blue', alpha=0.5)  # Individual E-to-I means
+
+    # Plot the overall mean and standard deviation of absolute values as error bars
+    plt.errorbar(['E-to-E'], [abs_mean_e_to_e], yerr=[abs_std_e_to_e], fmt='o', label='E-to-E Mean (Abs)', color='red', capsize=5)
+    plt.errorbar(['E-to-I'], [abs_mean_e_to_i], yerr=[abs_std_e_to_i], fmt='o', label='E-to-I Mean (Abs)', color='blue', capsize=5)
+
+    plt.ylabel('Average Absolute Weight')
+    plt.title('Average Absolute Weights in E-I Network Across Runs')
+    plt.legend()
+    plt.savefig('average_abs_weights_EI_across_runs.png', dpi=300)
+    plt.show()
