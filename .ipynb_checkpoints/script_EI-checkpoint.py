@@ -41,10 +41,12 @@ class STPNR(torch.nn.Module):
         # Readout layer
         self.hidden2tag = torch.nn.Linear(hidden_size, output_size)
 
-    def forward(self, sentence: torch.Tensor, states: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+    def forward(self, sentence: torch.Tensor, states: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, collect_states=False):
         # Batch first assumption, seq second
         batch_size, seq_len = sentence.size()[:2]
+        #print(seq_lens)
         device = sentence.device
+        f_tp1_states = []  # Initialize list to store f_tp1 states
 
         if states is None:
             # neuronal activations and synaptic states (short-term component F), respectively
@@ -72,10 +74,16 @@ class STPNR(torch.nn.Module):
             # update neuronal memories
             states = (h_tp1, f_tp1)
             
+            if collect_states:
+                f_tp1_states.append(states[1].detach().cpu().numpy())
+            
 
         # readout to get classes scores
         tag_space = self.hidden2tag(h_tp1)
-        return tag_space, states
+        if collect_states:
+            return tag_space, states, f_tp1_states  # Return the additional states
+        else:
+            return tag_space, states
 
 
 def main(config):
@@ -145,41 +153,56 @@ def main(config):
             print("Best validation accuracy", best_validation_acc)
             print("Last validation accuracy", last_validation_acc)
             print("Last loss", f"{loss.cpu().item():4f}")
-        ''' if i_epoch == n_epochs:
-            sentence, _ = next(iter(validation_dataloader))  # Get a sample batch
-            sentence = sentence.to(device)
-            _, states = net(sentence, states=None)
-            # Detach the tensors from the computational graph before converting to numpy
-            final_f_tp1 = (states[0].detach().cpu().numpy(), states[1].detach().cpu().numpy())
-
-        if final_f_tp1 is not None:
-            print("xxx")
-            # Taking the mean across the batch dimension for visualization
-            print(final_f_tp1[1].shape)
-            mean_f_tp1 = np.mean(final_f_tp1[1], axis=0)
-            plt.imshow(mean_f_tp1, cmap='hot', interpolation='nearest')
-            plt.colorbar()
-            plt.title('Final f_tp1 values after Training')
-
-            # Specify the filename and path here
-            plt.savefig('final_f_tp1_plot_EI.png', dpi=300)
-            plt.close() ''' 
             
         if i_epoch == n_epochs:
             sentence, _ = next(iter(validation_dataloader))  # Get a sample batch
+            #print(sentence)
             sentence = sentence.to(device)
             _, states = net(sentence, states=None)
-            final_f_tp1 = states[1].detach().cpu().numpy()  # Only need states[1]
+            _, _, f_tp1_dynamics = net(sentence, states=None, collect_states=True)
+            final_f_tp1 = states[1].detach().cpu().numpy()  
             print(final_f_tp1.shape)
+            
+            f_tp1_dynamics_array = np.stack(f_tp1_dynamics)
 
+            # Initialize lists to store mean values over time
+            e_to_e_means = []
+            e_to_i_means = []
+
+            num_inputs = 37  # The number of input units
+            num_excitatory = 4 * (f_tp1_dynamics_array.shape[-1] - num_inputs) // 5  # 4/5 are E units
+
+            # Compute mean values over time
+            for t in range(f_tp1_dynamics_array.shape[0]):
+                current_f_tp1 = f_tp1_dynamics_array[t]
+                e_to_e_mean = np.mean(current_f_tp1[:, :num_excitatory, num_inputs:num_excitatory+num_inputs])
+                e_to_i_mean = np.mean(current_f_tp1[:, num_excitatory:, num_inputs:num_excitatory+num_inputs])
+                e_to_e_means.append(e_to_e_mean)
+                e_to_i_means.append(e_to_i_mean)
+
+            # Plotting the dynamics over time
+            plt.figure(figsize=(10, 5))
+            plt.plot(e_to_e_means, label='E-to-E Mean', color='red')
+            plt.plot(e_to_i_means, label='E-to-I Mean', color='blue')
+            plt.xlabel('Time Step')
+            plt.ylabel('Average Weight')
+            plt.title('Dynamics of E-to-E and E-to-I Weights Over Time')
+            plt.legend()
+            plt.savefig('dynamics_depression.png', dpi=300)
+            plt.show()
+            
+            plt.clf()
+           
+        num_inputs = 37
+        input_size = 37
         if final_f_tp1 is not None:
-            num_inputs = 37  # Use the provided input_size
+              # Use the provided input_size
             num_excitatory = 4 * (final_f_tp1.shape[2] - num_inputs) // 5  # 4/5 are E units
-
+    
             # Adjust indices to exclude input weights
             e_to_e_mean = np.mean(final_f_tp1[:, :num_excitatory, num_inputs:num_excitatory+num_inputs])
             e_to_i_mean = np.mean(final_f_tp1[:, num_excitatory:, num_inputs:num_excitatory+num_inputs])
-
+     
             # Plotting the means as bars
             plt.bar(['E-to-E', 'E-to-I'], [e_to_e_mean, e_to_i_mean], color=['red', 'blue'])
             plt.ylabel('Average Weight')
@@ -194,6 +217,55 @@ def main(config):
             plt.title('Final f_tp1 Matrix')
             plt.savefig('matrix_syn.png', dpi=300)
             plt.close()
+            plt.clf()
+         
+        if i_epoch == n_epochs:
+
+
+            # Assuming 'net' is your trained STPNR network
+            weight_lambda = net.weight_lambda.detach().cpu().numpy()  # Convert PyTorch tensor to NumPy array
+            weight_gamma = net.weight_gamma.detach().cpu().numpy()
+
+            # Compute E-to-E and E-to-I means for lambda and gamma
+            num_excitatory = weight_lambda.shape[0] * 4 // 5
+            num_inhibitory = weight_lambda.shape[0] // 5
+
+            # Lambda
+            lambda_e_to_e_mean = np.mean(weight_lambda[:num_excitatory, input_size:input_size+num_excitatory])
+            lambda_e_to_i_mean = np.mean(weight_lambda[:num_excitatory, -num_inhibitory:])
+
+            # Gamma
+            gamma_e_to_e_mean = np.mean(weight_gamma[:num_excitatory, input_size:input_size+num_excitatory])
+            gamma_e_to_i_mean = np.mean(weight_gamma[:num_excitatory, -num_inhibitory:])
+
+            # Plotting
+            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+            # Lambda Weight Matrix
+            im = axes[0, 0].imshow(weight_lambda, cmap='hot', interpolation='nearest')
+            axes[0, 0].set_title('Lambda Weight Matrix')
+            fig.colorbar(im, ax=axes[0, 0])  # Add colorbar correctly
+
+            # Gamma Weight Matrix
+            im = axes[0, 1].imshow(weight_gamma, cmap='hot', interpolation='nearest')
+            axes[0, 1].set_title('Gamma Weight Matrix')
+            fig.colorbar(im, ax=axes[0, 1])  # Add colorbar correctly
+
+            # E-to-E and E-to-I Means for Lambda
+            axes[1, 0].bar(['E-to-E', 'E-to-I'], [lambda_e_to_e_mean, lambda_e_to_i_mean], color=['red', 'blue'])
+            axes[1, 0].set_title('Lambda: E-to-E and E-to-I Means')
+            axes[1, 0].set_ylabel('Average Weight')
+
+            # E-to-E and E-to-I Means for Gamma
+            axes[1, 1].bar(['E-to-E', 'E-to-I'], [gamma_e_to_e_mean, gamma_e_to_i_mean], color=['red', 'blue'])
+            axes[1, 1].set_title('Gamma: E-to-E and E-to-I Means')
+            axes[1, 1].set_ylabel('Average Weight')
+
+            plt.tight_layout()
+            plt.savefig('matrix_gamma_lambda.png', dpi=300)
+            plt.close()
+        
+
     
 
 

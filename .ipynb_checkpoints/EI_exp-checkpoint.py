@@ -81,15 +81,16 @@ class STPNR(torch.nn.Module):
 
 def main(config):
     batch_size, output_size = 128, 37
+    num_inputs = 37
     final_f_tp1 = None  # Variable to store the final f_tp1
     # Dataloaders, will generate datasets if not found in DATA path
     train_dataloader, validation_dataloader, test_dataloader = load_data(
         batch_size=batch_size,
         data_path=DATA,
         onehot=True,
-        train_size=10000,
-        valid_size=5000,
-        test_size=1000,
+        train_size=50000,
+        valid_size=10000,
+        test_size=10000,
     )
 
     device = torch.device(f"cuda:{config['gpu']}") if config['gpu'] > -1 else torch.device('cpu')
@@ -105,7 +106,7 @@ def main(config):
     loss_function = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(net.parameters(), lr=0.001)
 
-    n_epochs, best_validation_acc = 150, -float('inf')
+    n_epochs, best_validation_acc = 80, -float('inf')
     e_to_e_mean, e_to_i_mean = None, None
     #change to 200
     for i_epoch in range(1, n_epochs + 1):
@@ -173,6 +174,11 @@ def main(config):
             _, states = net(sentence, states=None)
             final_f_tp1 = states[1].detach().cpu().numpy()  # Only need states[1]
             print(final_f_tp1.shape)
+            
+            lambda_e_to_e_mean = np.mean(net.weight_lambda.detach().cpu().numpy()[:num_excitatory,num_inputs:num_excitatory+num_inputs])
+            lambda_e_to_i_mean = np.mean(net.weight_lambda.detach().cpu().numpy()[:num_excitatory, -num_inhibitory:])
+            gamma_e_to_e_mean = np.mean(net.weight_gamma.detach().cpu().numpy()[:num_excitatory, num_inputs:num_excitatory+num_inputs])
+            gamma_e_to_i_mean = np.mean(net.weight_gamma.detach().cpu().numpy()[:num_excitatory, -num_inhibitory:])
 
         if final_f_tp1 is not None:
             num_inputs = 37  # Use the provided input_size
@@ -196,7 +202,10 @@ def main(config):
             plt.title('Final f_tp1 Matrix')
             plt.savefig('matrix_syn.png', dpi=300)
             plt.close()
-    return e_to_e_mean, e_to_i_mean
+
+    
+    return e_to_e_mean, e_to_i_mean, lambda_e_to_e_mean, lambda_e_to_i_mean, gamma_e_to_e_mean, gamma_e_to_i_mean
+
       
     
 
@@ -211,12 +220,62 @@ if __name__ == "__main__":
     # Lists to store the mean values from each run
     e_to_e_means = []
     e_to_i_means = []
+    lambda_e_to_e_means, lambda_e_to_i_means, gamma_e_to_e_means, gamma_e_to_i_means = [], [], [], []
 
     # Run the main function 10 times
     for _ in range(50):
-        e_to_e_mean, e_to_i_mean = main(vars(args))
+        e_to_e_mean, e_to_i_mean, lambda_e_to_e_mean, lambda_e_to_i_mean, gamma_e_to_e_mean, gamma_e_to_i_mean = main(vars(args))
         e_to_e_means.append(e_to_e_mean)
         e_to_i_means.append(e_to_i_mean)
+        lambda_e_to_e_means.append(lambda_e_to_e_mean)
+        lambda_e_to_i_means.append(lambda_e_to_i_mean)
+        gamma_e_to_e_means.append(gamma_e_to_e_mean)
+        gamma_e_to_i_means.append(gamma_e_to_i_mean)
+    
+    with open('lambda_gamma_means.pkl', 'wb') as f:
+        pickle.dump([lambda_e_to_e_means, lambda_e_to_i_means, gamma_e_to_e_means, gamma_e_to_i_means], f)
+    
+    
+    plt.figure(figsize=(12, 7))
+
+    # Plotting individual data points
+    for le2e, le2i in zip(lambda_e_to_e_means, lambda_e_to_i_means):
+        plt.scatter(['Lambda E-to-E'], [le2e], color='red', alpha=0.15)
+        plt.scatter(['Lambda E-to-I'], [le2i], color='blue', alpha=0.15)
+ 
+
+    # Plotting the overall mean and standard deviation as error bars
+    plt.errorbar(['Lambda E-to-E'], [np.mean(lambda_e_to_e_means)], yerr=[np.std(lambda_e_to_e_means)], fmt='o', label='Lambda E-to-E Mean', color='red', capsize=5)
+    plt.errorbar(['Lambda E-to-I'], [np.mean(lambda_e_to_i_means)], yerr=[np.std(lambda_e_to_i_means)], fmt='o', label='Lambda E-to-I Mean', color='blue', capsize=5)
+    
+
+    plt.ylabel('Average Weight')
+    plt.title('Average Weights Across Runs')
+    plt.legend()
+    plt.savefig('lambda_weights_across_runs.png', dpi=300)
+    plt.show()
+    plt.clf()
+    
+    plt.figure(figsize=(12, 7))
+
+    # Plotting individual data points
+    for ge2e, ge2i in zip(gamma_e_to_e_means, gamma_e_to_i_means):
+        plt.scatter(['Gamma E-to-E'], [ge2e], color='red', alpha=0.15)
+        plt.scatter(['Gamma E-to-I'], [ge2i], color='blue', alpha=0.15)
+
+    
+    plt.errorbar(['Gamma E-to-E'], [np.mean(gamma_e_to_e_means)], yerr=[np.std(gamma_e_to_e_means)], fmt='o', label='Gamma E-to-E Mean', color='red', capsize=5)
+    plt.errorbar(['Gamma E-to-I'], [np.mean(gamma_e_to_i_means)], yerr=[np.std(gamma_e_to_i_means)], fmt='o', label='Gamma E-to-I Mean', color='blue', capsize=5)
+
+    plt.ylabel('Average Weight')
+    plt.title('Average Weights Across Runs')
+    plt.legend()
+    plt.savefig('gamma_weights_across_runs.png', dpi=300)
+    plt.show()
+    plt.clf()
+    
+    
+
 
     # Compute mean and standard deviation
     mean_e_to_e = np.mean(e_to_e_means)
@@ -249,8 +308,8 @@ if __name__ == "__main__":
     plt.clf()
     
     # Convert e_to_e_means and e_to_i_means to their absolute values
-    abs_e_to_e_means = [abs(x) for x in e_to_e_means]
-    abs_e_to_i_means = [abs(x) for x in e_to_i_means]
+    abs_e_to_e_means = [-x for x in e_to_e_means]
+    abs_e_to_i_means = [-x for x in e_to_i_means]
 
     # Compute mean and standard deviation for the absolute values
     abs_mean_e_to_e = np.mean(abs_e_to_e_means)
